@@ -1,0 +1,2 @@
+#!/bin/bash
+mpiexec -n 16 ./advection 64 100 1.0 1.0e6 5.0e-7 2.85e-7 1 mpi_blocking
