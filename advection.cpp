@@ -106,8 +106,9 @@ struct LocalMatrix {
 	}
 
 	void
-	Serialize(MPI_File * file, MPI_Offset * base, int nRanksPerDim, cllu_t fullN) const {
-		int topLeftIndex = x_*N_*N_*nRanksPerDim + y_*N_;
+	Serialize(MPI_File * file, MPI_Offset * base,
+			  int nRanksPerDim, cllu_t fullN, int matOffset) const {
+		int topLeftIndex = x_*N_*N_*nRanksPerDim + y_*N_ + matOffset*fullN*fullN;
 		int stat;
 		for (llu_t r=0; r<N_; ++r) {
 			MPI_Status status;
@@ -121,7 +122,6 @@ struct LocalMatrix {
 			assert(stat == MPI_SUCCESS);
 		}
 	}
-
 };
 
 
@@ -204,10 +204,15 @@ lax_method(cd_t l, cd_t r, cd_t t,
 	return 0.25*(b + t + l + r) - (dt/(2*dx))*(u*(t-b) + v*(r-l));
 }
 
+static void
+BlockingAdvection(Config & cfg) {
+
+}
+
 int
 main(int argc, char ** argv) {
 	if (argc != 9) {
-		cout << "Usage: ./advection <N> <NT> <L> <T> <u> <v> <t> <parallization>" << endl;
+		cout << "Usage: ./advection <N> <NT> <L> <T> <u> <v> <t> <parallelization>" << endl;
 		return EXIT_FAILURE;
 	}
 
@@ -276,6 +281,7 @@ main(int argc, char ** argv) {
 	LocalMatrix c0(localN, coords[0], coords[1]);
 	LocalMatrix c1(localN, coords[0], coords[1]);
 	c0.FillGaussian(dx, cfg.L_);
+
 	LocalMatrix * cp0 = &c0;
 	LocalMatrix * cp1 = &c1;
 	LocalMatrix * cpTmp = nullptr;
@@ -293,13 +299,14 @@ main(int argc, char ** argv) {
 	stat = MPI_File_get_position(file, &base);
 	assert(stat==MPI_SUCCESS);
 
-
+	c0.Serialize(&file, &base, nRanksPerDim, cfg.N_, 0);
 	double * sendLeftBuf = new double[c0.N_];
 	double * sendRightBuf = new double[c0.N_];
 	double * leftGhostCol = new double[c0.N_];
 	double * rightGhostCol = new double[c0.N_];
 	double * topGhostRow = new double[c0.N_];
 	double * botGhostRow = new double[c0.N_];
+
 	// Timestep loop
 	for(llu_t timestep=0; timestep<cfg.NT_; timestep++)
 	{
@@ -347,7 +354,7 @@ main(int argc, char ** argv) {
 				MPI_DOUBLE,       // Type I am sending
 				left,             // Who I am sending to
 				99,               // Tag (I don't care)
-				rightGhostCol,  // Data buffer to receive
+				rightGhostCol,    // Data buffer to receive
 				c0.N_,        	  // How many elements I am receieving
 				MPI_DOUBLE,       // Type
 				right,            // Who I am receiving from
@@ -374,9 +381,6 @@ main(int argc, char ** argv) {
 				&status);         // Status Variable
 		assert(stat==MPI_SUCCESS);
 
-//		stat = MPI_Barrier(MPI_COMM_WORLD);
-//		assert(stat==MPI_SUCCESS);
-
 		for (llu_t i=0; i<c0.N_; ++i) {
 			for (llu_t j=0; j<c0.N_; ++j) {
 				double left_value = j==0 ? leftGhostCol[i] : cp0->GetCell(i, j-1);
@@ -391,8 +395,8 @@ main(int argc, char ** argv) {
 		cpTmp = cp1;
 		cp1 = cp0;
 		cp0 = cpTmp;
-//		stat = MPI_Barrier(MPI_COMM_WORLD);
-//		assert(stat==MPI_SUCCESS);
+		if (timestep==cfg.NT_/2)
+			cp0->Serialize(&file, &base, nRanksPerDim, cfg.N_, 1);
 	}
 	delete[] sendLeftBuf;
 	delete[] sendRightBuf;
@@ -400,7 +404,7 @@ main(int argc, char ** argv) {
 	delete[] rightGhostCol;
 	delete[] botGhostRow;
 	delete[] topGhostRow;
-	cp0->Serialize(&file, &base, nRanksPerDim, cfg.N_);
+	cp0->Serialize(&file, &base, nRanksPerDim, cfg.N_, 2);
 	stat = MPI_File_close(&file);
 	assert(stat==MPI_SUCCESS);
 	stat = MPI_Finalize();
