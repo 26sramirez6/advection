@@ -28,6 +28,8 @@ using std::string;
 using std::fstream;
 using std::min;
 
+using cd_t = const double;
+using llu_t = long long unsigned;
 using cll_t = const long long;
 using cllu_t = const unsigned long long;
 constexpr int snap_shots = 1;
@@ -47,36 +49,46 @@ struct LocalMatrix {
 		delete[] data_;
 	}
 
-	inline double &
-	Get(cllu_t x, cllu_t y) {
-		return data_[N_*x + y];
+	inline void
+	SetCell(cllu_t x, cllu_t y, double val) {
+		data_[N_*x + y] = val;
 	}
 
 	inline double
-	Get(cllu_t x, cllu_t y) const {
+	GetCell(cllu_t x, cllu_t y) const {
 		return data_[N_*x + y];
 	}
 
 	inline double &
-	GetRow(cllu_t x) const {
-		return data_[N_*x];
+	GetCell(cllu_t x, cllu_t y) {
+		return data_[N_*x + y];
+	}
+
+	inline double *
+	GetCellPtr(cllu_t x, cllu_t y) const {
+		return &data_[N_*x + y];
+	}
+
+	inline double *
+	GetRowPtr(cllu_t x) const {
+		return &data_[N_*x];
 	}
 
 	inline void
 	FillBufferWithCol(cllu_t y, double * fillBuf) const {
-		for (int i=0; i<N_; ++i) {
+		for (llu_t i=0; i<N_; ++i) {
 			fillBuf[i] = data_[N_*i + y];
 		}
 		return;
 	}
 
 	void
-	FillGaussian(const double dx, cll_t L) {
-		const double den = 2*( powl((double)L/4., 2.) );
-		const double x0 = ((double) L)/2.;
-		for (size_t r=0; r<N_; ++r) {
-			for (size_t c=0; c<N_; ++c) {
-				Get(r,c) = expl(-(powl(dx*(r+(N_*x_)) - x0, 2.)/den + powl(dx*(c+(N_*y_)) - x0, 2.)/den));
+	FillGaussian(cd_t dx, cll_t L) {
+		cd_t den = 2*( powl((double)L/4., 2.) );
+		cd_t x0 = ((double) L)/2.;
+		for (llu_t r=0; r<N_; ++r) {
+			for (llu_t c=0; c<N_; ++c) {
+				GetCell(r,c) = expl(-(powl(dx*(r+(N_*x_)) - x0, 2.)/den + powl(dx*(c+(N_*y_)) - x0, 2.)/den));
 			}
 		}
 	}
@@ -84,9 +96,9 @@ struct LocalMatrix {
 	void
 	Serialize (FILE * f) const {
 		cllu_t N = N_;
-		for (size_t r = 0; r<N; ++r) {
-			for (size_t c = 0; c<N; ++c) {
-				fprintf(f, "%.4lf,", Get(r,c));
+		for (llu_t r = 0; r<N; ++r) {
+			for (llu_t c = 0; c<N; ++c) {
+				fprintf(f, "%.4lf,", GetCell(r,c));
 			}
 			fputc('\n', f);
 		}
@@ -96,15 +108,17 @@ struct LocalMatrix {
 	void
 	Serialize(MPI_File * file, MPI_Offset * base, int nRanksPerDim, cllu_t fullN) const {
 		int topLeftIndex = x_*N_*N_*nRanksPerDim + y_*N_;
-		for (int r=0; r<N_; ++r) {
+		int stat;
+		for (llu_t r=0; r<N_; ++r) {
 			MPI_Status status;
-			MPI_File_write_at_all(
-				*file, // file handle
+			stat = MPI_File_write_at_all(
+				*file, 											 // file handle
 				*base + sizeof(double)*(topLeftIndex + r*fullN), // file offset
-				&c0.Get(r, 0), // buffer
-				N_, // count of elements in buffer
-				MPI_DOUBLE,
-				&status);// datatype of each element in buffer
+				GetCellPtr(r, 0),								 // buffer
+				N_, 											 // count of elements in buffer
+				MPI_DOUBLE,										 // datatype of each element in buffer
+				&status);										 // status
+			assert(stat == MPI_SUCCESS);
 		}
 	}
 
@@ -150,10 +164,10 @@ StringToParallelType(string in) {
 struct Config {
 	cllu_t N_;
 	cllu_t NT_;
-	const double L_;
-	const double T_;
-	const double u_;
-	const double v_;
+	cd_t L_;
+	cd_t T_;
+	cd_t u_;
+	cd_t v_;
 	int t_;
 	ParallelType pt_;
 
@@ -179,13 +193,14 @@ struct Config {
 			endl;
 
 		cout << "Estimated memory usage = " <<
-			2*N_*N_*sizeof(const double) << " bytes" << endl;
+			2*N_*N_*sizeof(cd_t) << " bytes" << endl;
 	}
 };
 
 static inline long double
-lax_method(cld_t l, cld_t r, cld_t t, cld_t b,
-	cld_t dt, cld_t dx, cld_t u, cld_t v) {
+lax_method(cd_t l, cd_t r, cd_t t,
+		cd_t b, cd_t dt, cd_t dx,
+		cd_t u, cd_t v) {
 	return 0.25*(b + t + l + r) - (dt/(2*dx))*(u*(t-b) + v*(r-l));
 }
 
@@ -197,8 +212,8 @@ main(int argc, char ** argv) {
 	}
 
 	Config cfg(argv);
-	const double dx = cfg.L_ / cfg.N_;
-	const double dt = cfg.T_ / cfg.NT_;
+	cd_t dx = cfg.L_ / cfg.N_;
+	cd_t dt = cfg.T_ / cfg.NT_;
 	assert(dt <= dx/(sqrt(2*(cfg.u_*cfg.u_ + cfg.v_*cfg.v_))) &&
 			"Failed Courant stability condition");
 
@@ -261,14 +276,12 @@ main(int argc, char ** argv) {
 	LocalMatrix c0(localN, coords[0], coords[1]);
 	LocalMatrix c1(localN, coords[0], coords[1]);
 	c0.FillGaussian(dx, cfg.L_);
-	LocalMatrix * cp0;
-	LocalMatrix * cp1;
-	LocalMatrix * cpTmp;
+	LocalMatrix * cp0 = &c0;
+	LocalMatrix * cp1 = &c1;
+	LocalMatrix * cpTmp = nullptr;
 
 	MPI_File file;
 	MPI_Offset base;
-	stat = MPI_File_get_position(file, &base);
-	assert(stat==MPI_SUCCESS);
 	stat = MPI_File_open(
 		MPI_COMM_WORLD,  					// communicator
 		"hw2.out",							// output file name
@@ -277,43 +290,46 @@ main(int argc, char ** argv) {
 		&file); 							// file object
 	assert(stat==MPI_SUCCESS);
 
+	stat = MPI_File_get_position(file, &base);
+	assert(stat==MPI_SUCCESS);
+
+
 	double * sendLeftBuf = new double[c0.N_];
 	double * sendRightBuf = new double[c0.N_];
+	double * left_ghost_col = new double[c0.N_];
+	double * right_ghost_col = new double[c0.N_];
+	double * top_ghost_row = new double[c0.N_];
+	double * bot_ghost_row = new double[c0.N_];
 	// Timestep loop
-	for(size_t timestep=0; timestep<cfg.NT_; timestep++)
+	for(llu_t timestep=0; timestep<cfg.NT_; timestep++)
 	{
-		double * left_ghost_col;
-		double * right_ghost_col;
-		double * top_ghost_row;
-		double * bot_ghost_row;
 		MPI_Status status;
-
 		// Shift all data to bot using sendrecv
 		// I.e., I send my data to my bot neighbor, and I receive from my top neighbor
 		stat = MPI_Sendrecv(
-				&(cp0->GetRow(c0.N_ - 1)),// Data I am sending
-				c0.N_,        // Number of elements to send
-				MPI_DOUBLE,        // Type I am sending
-				bot,               // Who I am sending to
-				99,                // Tag (I don't care)
-				&top_ghost_row,    // Data buffer to receive to
-				c0.N_,        // How many elements I am receieving
-				MPI_DOUBLE,        // Type
-				top,               // Who I am receiving from
-				MPI_ANY_TAG,       // Tag (I don't care)
-				comm2d,            // Our MPI Cartesian Communicator object
-				&status);          // Status Variable
+				cp0->GetRowPtr(c0.N_ - 1),	// Data I am sending
+				c0.N_,        	   			// Number of elements to send
+				MPI_DOUBLE,        			// Type I am sending
+				bot,               			// Who I am sending to
+				99,                			// Tag (I don't care)
+				top_ghost_row,    			// Data buffer to receive to
+				c0.N_,        	   			// How many elements I am receieving
+				MPI_DOUBLE,        			// Type
+				top,               			// Who I am receiving from
+				MPI_ANY_TAG,       			// Tag (I don't care)
+				comm2d,            			// Our MPI Cartesian Communicator object
+				&status);          			// Status Variable
 		assert(stat==MPI_SUCCESS);
 
 		// Shift all data to top using sendrecv
 		// I.e., I send my data to my top neighbor, and I receive from my bot neighbor
 		stat = MPI_Sendrecv(
-				&(cp0.GetRow(0)),// Data I am sending
+				cp0->GetRowPtr(0),// Data I am sending
 				c0.N_,        // Number of elements to send
 				MPI_DOUBLE,        // Type I am sending
 				top,               // Who I am sending to
 				99,                // Tag (I don't care)
-				&bot_ghost_row,    // Data buffer to receive to
+				bot_ghost_row,    // Data buffer to receive to
 				c0.N_,        // How many elements I am receieving
 				MPI_DOUBLE,        // Type
 				bot,               // Who I am receiving from
@@ -326,45 +342,45 @@ main(int argc, char ** argv) {
 		// I.e., I send my data to my left neighbor, and I receive from my right neighbor
 		cp0->FillBufferWithCol(0, sendLeftBuf);
 		stat = MPI_Sendrecv(
-				&sendLeftBuf,      // Data I am sending
-				c0.N_,        // Number of elements to send
-				MPI_DOUBLE,        // Type I am sending
-				left,              // Who I am sending to
-				99,                // Tag (I don't care)
-				&right_ghost_col,  // Data buffer to receive to
-				c0.N_,        // How many elements I am receieving
-				MPI_DOUBLE,        // Type
-				right,             // Who I am receiving from
-				MPI_ANY_TAG,       // Tag (I don't care)
-				comm2d,            // Our MPI Cartesian Communicator object
-				&status);          // Status Variable
+				sendLeftBuf,      // Data I am sending
+				c0.N_,       	  // Number of elements to send
+				MPI_DOUBLE,       // Type I am sending
+				left,             // Who I am sending to
+				99,               // Tag (I don't care)
+				right_ghost_col,  // Data buffer to receive
+				c0.N_,        	  // How many elements I am receieving
+				MPI_DOUBLE,       // Type
+				right,            // Who I am receiving from
+				MPI_ANY_TAG,      // Tag (I don't care)
+				comm2d,           // Our MPI Cartesian Communicator object
+				&status);         // Status Variable
 		assert(stat==MPI_SUCCESS);
 
 		// Shift all data to right using sendrecv
 		// I.e., I send my data to my right neighbor, and I receive from my left neighbor
 		cp0->FillBufferWithCol(c0.N_-1, sendRightBuf);
 		stat = MPI_Sendrecv(
-				&sendRightBuf,     // Data I am sending
-				c0.N_,        	   // Number of elements to send
-				MPI_DOUBLE,        // Type I am sending
-				right,             // Who I am sending to
-				99,                // Tag (I don't care)
-				&left_ghost_row,   // Data buffer to receive to
-				c0.N_,        	   // How many elements I am receieving
-				MPI_DOUBLE,        // Type
-				left,              // Who I am receiving from
-				MPI_ANY_TAG,       // Tag (I don't care)
-				comm2d,            // Our MPI Cartesian Communicator object
-				&status);          // Status Variable
+				sendRightBuf,     // Data I am sending
+				c0.N_,        	  // Number of elements to send
+				MPI_DOUBLE,       // Type I am sending
+				right,            // Who I am sending to
+				99,               // Tag (I don't care)
+				left_ghost_col,   // Data buffer to receive to
+				c0.N_,        	  // How many elements I am receieving
+				MPI_DOUBLE,       // Type
+				left,             // Who I am receiving from
+				MPI_ANY_TAG,      // Tag (I don't care)
+				comm2d,           // Our MPI Cartesian Communicator object
+				&status);         // Status Variable
 		assert(stat==MPI_SUCCESS);
 
-		for (size_t i=0; i<c0.N_; ++i) {
-			for (size_t j=0; j<c0.N_; ++j) {
-				double left_value = j==0 ? left_ghost_col[i] : cp0->Get(i, c0.N_-1);
-				double right_value = j==c0.N_-1 ? right_ghost_col[i] : cp0->Get(i, j+1);
-				double top_value = i==0 ? top_ghost_row[j] : cp0->Get(i-1, j);
-				double bot_value = i==c0.N_-1 ? bot_ghost_row[j] : cp0->Get(i+1, j);
-				cp1->Get(i,j) = lax_method(left_value, right_value, top_value,
+		for (llu_t i=0; i<c0.N_; ++i) {
+			for (llu_t j=0; j<c0.N_; ++j) {
+				double left_value = j==0 ? left_ghost_col[i] : cp0->GetCell(i, j-1);
+				double right_value = j==c0.N_-1 ? right_ghost_col[i] : cp0->GetCell(i, j+1);
+				double top_value = i==0 ? top_ghost_row[j] : cp0->GetCell(i-1, j);
+				double bot_value = i==c0.N_-1 ? bot_ghost_row[j] : cp0->GetCell(i+1, j);
+				cp1->GetCell(i, j) = lax_method(left_value, right_value, top_value,
 						bot_value, dt, dx, cfg.u_, cfg.v_);
 			}
 		}
@@ -375,6 +391,8 @@ main(int argc, char ** argv) {
 		stat = MPI_Barrier(MPI_COMM_WORLD);
 		assert(stat==MPI_SUCCESS);
 	}
+	delete[] sendLeftBuf;
+	delete[] sendRightBuf;
 	cp0->Serialize(&file, &base, nRanksPerDim, cfg.N_);
 	stat = MPI_File_close(&file);
 	assert(stat==MPI_SUCCESS);
