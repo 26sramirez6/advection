@@ -77,7 +77,7 @@ struct LocalMatrix {
 	inline void
 	FillBufferWithCol(cllu_t y, double * fillBuf) const {
 		for (llu_t i=0; i<N_; ++i) {
-			fillBuf[i] = data_[N_*i + y];
+			fillBuf[i] = GetCell(i, y); //data_[N_*i + y];
 		}
 		return;
 	}
@@ -260,16 +260,16 @@ main(int argc, char ** argv) {
 			comm2d,    // Our Cartesian Communicator Object
 			0,         // Which dimension we are shifting
 			1,         // Direction of the shift
-			&left,     // Tells us our Left neighbor
-			&right);   // Tells us our Right neighbor
+			&top,     // Tells us our Left neighbor
+			&bot);   // Tells us our Right neighbor
 	assert(stat==MPI_SUCCESS);
 
 	stat = MPI_Cart_shift(
 			comm2d,    // Our Cartesian Communicator Object
 			1,         // Which dimension we are shifting
 			1,         // Direction of the shift
-			&top,      // Tells us our Left neighbor
-			&bot);     // Tells us our Right neighbor
+			&left,      // Tells us our Left neighbor
+			&right);     // Tells us our Right neighbor
 	assert(stat==MPI_SUCCESS);
 
 	cll_t localN = cfg.N_ / nRanksPerDim;
@@ -296,10 +296,10 @@ main(int argc, char ** argv) {
 
 	double * sendLeftBuf = new double[c0.N_];
 	double * sendRightBuf = new double[c0.N_];
-	double * left_ghost_col = new double[c0.N_];
-	double * right_ghost_col = new double[c0.N_];
-	double * top_ghost_row = new double[c0.N_];
-	double * bot_ghost_row = new double[c0.N_];
+	double * leftGhostCol = new double[c0.N_];
+	double * rightGhostCol = new double[c0.N_];
+	double * topGhostRow = new double[c0.N_];
+	double * botGhostRow = new double[c0.N_];
 	// Timestep loop
 	for(llu_t timestep=0; timestep<cfg.NT_; timestep++)
 	{
@@ -312,7 +312,7 @@ main(int argc, char ** argv) {
 				MPI_DOUBLE,        			// Type I am sending
 				bot,               			// Who I am sending to
 				99,                			// Tag (I don't care)
-				top_ghost_row,    			// Data buffer to receive to
+				topGhostRow,    			// Data buffer to receive to
 				c0.N_,        	   			// How many elements I am receieving
 				MPI_DOUBLE,        			// Type
 				top,               			// Who I am receiving from
@@ -324,18 +324,18 @@ main(int argc, char ** argv) {
 		// Shift all data to top using sendrecv
 		// I.e., I send my data to my top neighbor, and I receive from my bot neighbor
 		stat = MPI_Sendrecv(
-				cp0->GetRowPtr(0),// Data I am sending
-				c0.N_,        // Number of elements to send
-				MPI_DOUBLE,        // Type I am sending
-				top,               // Who I am sending to
-				99,                // Tag (I don't care)
-				bot_ghost_row,    // Data buffer to receive to
-				c0.N_,        // How many elements I am receieving
-				MPI_DOUBLE,        // Type
-				bot,               // Who I am receiving from
-				MPI_ANY_TAG,       // Tag (I don't care)
-				comm2d,            // Our MPI Cartesian Communicator object
-				&status);          // Status Variable
+				cp0->GetRowPtr(0),	// Data I am sending
+				c0.N_,        		// Number of elements to send
+				MPI_DOUBLE,        	// Type I am sending
+				top,               	// Who I am sending to
+				99,                	// Tag (I don't care)
+				botGhostRow,    	// Data buffer to receive to
+				c0.N_,        		// How many elements I am receieving
+				MPI_DOUBLE,        	// Type
+				bot,               	// Who I am receiving from
+				MPI_ANY_TAG,       	// Tag (I don't care)
+				comm2d,            	// Our MPI Cartesian Communicator object
+				&status);          	// Status Variable
 		assert(stat==MPI_SUCCESS);
 
 		// Shift all data to left using sendrecv
@@ -347,7 +347,7 @@ main(int argc, char ** argv) {
 				MPI_DOUBLE,       // Type I am sending
 				left,             // Who I am sending to
 				99,               // Tag (I don't care)
-				right_ghost_col,  // Data buffer to receive
+				rightGhostCol,  // Data buffer to receive
 				c0.N_,        	  // How many elements I am receieving
 				MPI_DOUBLE,       // Type
 				right,            // Who I am receiving from
@@ -365,7 +365,7 @@ main(int argc, char ** argv) {
 				MPI_DOUBLE,       // Type I am sending
 				right,            // Who I am sending to
 				99,               // Tag (I don't care)
-				left_ghost_col,   // Data buffer to receive to
+				leftGhostCol,   // Data buffer to receive to
 				c0.N_,        	  // How many elements I am receieving
 				MPI_DOUBLE,       // Type
 				left,             // Who I am receiving from
@@ -374,12 +374,15 @@ main(int argc, char ** argv) {
 				&status);         // Status Variable
 		assert(stat==MPI_SUCCESS);
 
+//		stat = MPI_Barrier(MPI_COMM_WORLD);
+//		assert(stat==MPI_SUCCESS);
+
 		for (llu_t i=0; i<c0.N_; ++i) {
 			for (llu_t j=0; j<c0.N_; ++j) {
-				double left_value = j==0 ? left_ghost_col[i] : cp0->GetCell(i, j-1);
-				double right_value = j==c0.N_-1 ? right_ghost_col[i] : cp0->GetCell(i, j+1);
-				double top_value = i==0 ? top_ghost_row[j] : cp0->GetCell(i-1, j);
-				double bot_value = i==c0.N_-1 ? bot_ghost_row[j] : cp0->GetCell(i+1, j);
+				double left_value = j==0 ? leftGhostCol[i] : cp0->GetCell(i, j-1);
+				double right_value = j==c0.N_-1 ? rightGhostCol[i] : cp0->GetCell(i, j+1);
+				double top_value = i==0 ? topGhostRow[j] : cp0->GetCell(i-1, j);
+				double bot_value = i==c0.N_-1 ? botGhostRow[j] : cp0->GetCell(i+1, j);
 				cp1->GetCell(i, j) = lax_method(left_value, right_value, top_value,
 						bot_value, dt, dx, cfg.u_, cfg.v_);
 			}
@@ -388,11 +391,15 @@ main(int argc, char ** argv) {
 		cpTmp = cp1;
 		cp1 = cp0;
 		cp0 = cpTmp;
-		stat = MPI_Barrier(MPI_COMM_WORLD);
-		assert(stat==MPI_SUCCESS);
+//		stat = MPI_Barrier(MPI_COMM_WORLD);
+//		assert(stat==MPI_SUCCESS);
 	}
 	delete[] sendLeftBuf;
 	delete[] sendRightBuf;
+	delete[] leftGhostCol;
+	delete[] rightGhostCol;
+	delete[] botGhostRow;
+	delete[] topGhostRow;
 	cp0->Serialize(&file, &base, nRanksPerDim, cfg.N_);
 	stat = MPI_File_close(&file);
 	assert(stat==MPI_SUCCESS);
