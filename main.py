@@ -160,8 +160,9 @@ class Surface3d(LayoutDOM):
 
     z = String
 
-N = 64#int(sys.argv[1])
-L = 1#int(sys.argv[2])
+N = int(sys.argv[1])
+L = int(sys.argv[2])
+name = sys.argv[3]
 x = np.arange(0, L, L/N)
 y = np.arange(0, L, L/N)
 xx, yy = np.meshgrid(x, y)
@@ -176,15 +177,14 @@ def build_plot(xx, yy, value):
         data_source=source, width=600, height=600)
     return surface
 
-with open(r"C:\Users\26sra\eclipse-workspace\hpc\hw2\hw2.out", "rb") as f:
+with open("./hw2.out", "rb") as f:
     data = np.fromfile(f, dtype=np.double, count=-1)
     matCount = len(data)//(N*N)
     data = data.reshape(matCount, N, N)
     for i in range(matCount):
         print("Plotting matrix {0}".format(i))
-        plots.append(build_plot(xx, yy, data[i]))
+        plots.append(build_plot(xx, yy, data[i].ravel()))
 
 html = file_html(column(*plots), INLINE)
-with open("hpc.html", 'w') as f:
+with open("{0}.html".format(name), 'w') as f:
     f.write(html)
-
